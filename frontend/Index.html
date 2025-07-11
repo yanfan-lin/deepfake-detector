@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SFY's Deepfake Detection</title>
+  <style>
+    /* Styles for the page */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: url('https://cdn.britannica.com/61/234061-050-6D985ED2/Carina-Nebula-Cosmic-Cliffs-NGC-3324-James-Webb-Space-Telescope-NIRCam.jpg') no-repeat center center fixed;
+      background-size: cover;
+    }
+
+    .overlay {
+      background-color: rgba(255, 255, 255, 0.5);
+      min-height: 100vh;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 30px;
+      text-shadow: 1px 1px 2px #fff;
+    }
+
+    .upload-container {
+      background-color: rgba(255, 255, 255, 0.8);
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+      text-align: center;
+      width: 400px;
+    }
+
+    input[type="file"] {
+      margin: 20px 0;
+    }
+
+    button {
+      padding: 12px 25px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background-color: #4a90e2;
+      color: white;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    button:hover {
+      background-color: #357ab8;
+    }
+
+    #preview {
+      max-width: 100%;
+      margin-top: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+    }
+
+    #result {
+      margin-top: 20px;
+      text-align: left;
+      font-size: 16px;
+      background-color: rgba(0, 0, 0, 0.05);
+      padding: 15px;
+      border-radius: 8px;
+    }
+  </style>
+
+</head>
+
+<body>
+  <div class="overlay">
+    <h1>Upload Image for Deepfake Detection</h1>
+    <div class="upload-container">
+      <input type="file" id="fileInput" />
+      <button id="uploadBtn">Upload</button>
+      <div id="result"></div>
+      <img id="preview" alt="Uploaded image preview" />
+    </div>
+  </div>
+
+  <script>
+    // APIGateway endpoints.
+    const apiUrl = 'https://p29u8owr14.execute-api.us-west-1.amazonaws.com/stg';
+
+    // Returns a promise that resolves after a delay in milliseconds.
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Uploads the selected file to S3 using a presigned URL and returns the public image URL.
+    async function uploadFile(file) {
+
+      // Retrieve a presigned URL from the backend.
+      const presignedResponse = await fetch(`${apiUrl}/generate-presigned-url?filename=${encodeURIComponent(file.name)}`);
+      if (!presignedResponse.ok) {
+        throw new Error('Failed to retrieve presigned URL.');
+      }
+      const presignedData = await presignedResponse.json();
+
+      // Prepare the form data for the image upload.
+      const formData = new FormData();
+      for (const key in presignedData.fields) {
+        formData.append(key, presignedData.fields[key]);
+      }
+      formData.append('file', file);
+
+      // Perform the file upload.
+      const uploadResponse = await fetch(presignedData.url, {
+        method: 'POST',
+        body: formData
+      });
+      if (!uploadResponse.ok) {
+        throw new Error('File upload failed.');
+      }
+
+      // Wait for 3 secs to ensure the image is available on S3 bucket.
+      await delay(3000);
+      return `https://yfldeepfake.s3.us-west-1.amazonaws.com/${presignedData.fields.key}`;
+    }
+
+    // Sends the image URL for API analysis and displays the resulting verdict.
+    async function analyzeImage(imageUrl) {
+
+      // Update the image preview.
+      document.getElementById('preview').src = imageUrl;
+
+      // Request analysis from the backend.
+      const analysisResponse = await fetch(`${apiUrl}/analyze?image_url=${encodeURIComponent(imageUrl)}`);
+      if (!analysisResponse.ok) {
+        const errorDetail = await analysisResponse.json();
+        throw new Error(`Analysis failed: ${errorDetail.error?.message || 'Unknown error'}`);
+      }
+      const result = await analysisResponse.json();
+      const score = result.type?.ai_generated ?? 0;
+      let label = '';
+
+      // Determine the verdict based on the AI-generated score.
+      if (score >= 0.8) {
+        label = '🔴 High probability (Fake)';
+      } else if (score >= 0.6) {
+        label = '🟠 Likely fake';
+      } else if (score >= 0.4) {
+        label = '🟡 Uncertain';
+      } else if (score >= 0.2) {
+        label = '🟢 Low probability';
+      } else {
+        label = '✅ Very unlikely (Real)';
+      }
+
+      // Display the result.
+      document.getElementById('result').innerHTML = `
+        <strong>AI-Generated Score:</strong> ${(score * 100).toFixed(2)}%<br/>
+        <strong>Verdict:</strong> ${label}
+      `;
+    }
+
+
+    // Main handler for file upload and image analysis.
+    async function handleUpload() {
+      try {
+        const fileInput = document.getElementById('fileInput');
+        const file = fileInput.files[0];
+        if (!file) {
+          alert('Please select a file to upload.');
+          return;
+        }
+        // Upload the file and get the public URL.
+        const imageUrl = await uploadFile(file);
+        // Analyze the uploaded image.
+        await analyzeImage(imageUrl);
+      } catch (error) {
+        console.error('Error:', error);
+        alert(`Error: ${error.message}`);
+      }
+    }
+
+    // Bind the upload button click event.
+    document.getElementById('uploadBtn').addEventListener('click', handleUpload);
+  </script>
+</body>
+</html>
